@@ -27,7 +27,7 @@ PAGE = """<!doctype html>
   <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:16px;">
     <div>
       <h1 style="margin:0 0 8px;">Sleep Tracker (Localhost)</h1>
-      <div class="muted">Now backed by SQLite (fake seeded data).</div>
+      <div class="muted">Sleep monitoring dashboard.</div>
     </div>
     <div>
       <label class="muted">Night:</label><br/>

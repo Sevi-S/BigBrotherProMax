@@ -30,6 +30,7 @@ WATCH_TIMEOUT = 30  # seconds
 _rows           = []
 _session_active = False
 _last_watch_ts  = None
+_both_connected = False
 
 watch_state = {"msg_id": None, "expected": 0, "chunks": {}}
 
@@ -56,7 +57,7 @@ def decode_frame(frame: bytes) -> dict | None:
 
 def session_start():
     global _session_active
-    if _session_active:
+    if _session_active or not _both_connected:
         return
     _session_active = True
     _rows.clear()
@@ -166,16 +167,31 @@ async def session_watchdog():
             session_end()
 
 
+_connected = {OXIMETER_NAME: False, WATCH_NAME: False}
+
 async def connect_device(name, handler, device):
+    global _both_connected
     if device is None:
         print(f"{name} not found during scan")
         return
     print(f"Connecting to {name} ({device.address})")
     async with BleakClient(device) as client:
+        if not client.is_connected:
+            print(f"{name} failed to connect")
+            return
         await client.start_notify(TX_UUID, handler)
-        print(f"{name} connected, listening...")
+        _connected[name] = True
+        print(f"{name} connected ✓")
+        if all(_connected.values()):
+            _both_connected = True
+            print("[READY] Both devices connected, waiting for watch data...")
         while True:
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
+            if not client.is_connected:
+                _connected[name] = False
+                _both_connected = False
+                print(f"{name} disconnected!")
+                return
 
 
 async def main():
@@ -186,17 +202,12 @@ async def main():
         print(f"Scanning for: {', '.join(missing)}...")
         devices = await BleakScanner.discover(timeout=8.0, return_adv=True)
         for d, adv in devices.values():
-            uuids = [u.lower() for u in (adv.service_uuids or [])]
             if d.name in found and found[d.name] is None:
                 found[d.name] = d
                 print(f"Found: {d.name}")
-            elif found[WATCH_NAME] is None and (d.name == WATCH_NAME or d.address == WATCH_ADDRESS or SERVICE_UUID in uuids):
+            elif found[WATCH_NAME] is None and d.address == WATCH_ADDRESS:
                 found[WATCH_NAME] = d
                 print(f"Found: {WATCH_NAME} (addr={d.address})")
-        if any(v is None for v in found.values()):
-            print("Retrying in 5s...")
-            await asyncio.sleep(5)
-            print(f"Found: {WATCH_NAME} (addr={d.address})")
         if any(v is None for v in found.values()):
             print("Retrying in 5s...")
             await asyncio.sleep(5)
