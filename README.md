@@ -13,6 +13,16 @@ pip install -r requirements.txt
 
 ## Running (after setup)
 
+Check that bluetooth is enabled on the raspi. From the gnome menu.
+
+after reboot restart the pythone venv
+
+```bash
+source .venv/bin/activate
+```
+
+then run the start up script
+
 ```bash
 ./start.sh
 ```
