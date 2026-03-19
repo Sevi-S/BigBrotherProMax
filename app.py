@@ -125,7 +125,7 @@ async function loadNightOptions(){
   nights.forEach(n=>{
     const opt = document.createElement("option");
     opt.value = n.night_date;
-    opt.textContent = `${n.night_date} (score ${n.sleep_score})`;
+    opt.textContent = `${n.night_date}${n.sleep_score != null ? ' (score ' + n.sleep_score + ')' : ''}`;
     sel.appendChild(opt);
   });
   sel.onchange = ()=>loadNight(sel.value);
@@ -203,12 +203,12 @@ def api_night(night_date: str):
 
   session_id = sess["id"]
 
-  # samples (downsample to ~1 point / minute for charts so browser stays fast)
+  # samples — oxi only for HR/SpO2 charts
   samples = db.execute(
     """
     SELECT ts, hr_bpm, spo2_pct
     FROM samples
-    WHERE session_id = ?
+    WHERE session_id = ? AND source = 'oxi'
     ORDER BY ts
     """,
     (session_id,)
