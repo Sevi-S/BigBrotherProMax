@@ -77,17 +77,18 @@ def session_end():
 #Handlers
 def oximeter_handler(sender, data: bytearray):
     ts = time.time()
+    print(f"[OXI_RAW| {ts:.3f}] len={len(data)} {data[:40]}")
     if not _session_active:
         return  # ignore oxi data outside of a session
     text = data.decode("utf-8", errors="ignore").strip()
     hr, spo2 = None, None
-    for part in text.split():
-        if part.startswith("HR:"):
-            try: hr = int(part[3:])
-            except ValueError: pass
-        if part.startswith("SpO2:"):
-            try: spo2 = int(part[5:])
-            except ValueError: pass
+    try:
+        parts = text.split(",")
+        h, s = int(parts[1]), int(parts[2])
+        if h != -1: hr = h
+        if s != -1: spo2 = s
+    except (IndexError, ValueError):
+        pass
     _rows.append((ts, "oxi", hr, spo2, None, None, None, None))
     print(f"[OXI  | {ts:.3f}] {text}")
 
@@ -138,7 +139,24 @@ async def connect_device(name, handler, device):
         if not client.is_connected:
             print(f"{name} failed to connect")
             return
-        await client.start_notify(TX_UUID, handler)
+        # Find a notify-capable characteristic
+        notify_char = None
+        if TX_UUID.lower() in [c.uuid.lower() for s in client.services for c in s.characteristics]:
+            notify_char = TX_UUID
+        else:
+            for svc in client.services:
+                for c in svc.characteristics:
+                    if "notify" in c.properties:
+                        notify_char = c.uuid
+                        break
+                if notify_char:
+                    break
+        if notify_char is None:
+            print(f"{name}: no notify characteristic found!")
+            return
+        if notify_char.lower() != TX_UUID.lower():
+            print(f"{name}: using characteristic {notify_char}")
+        await client.start_notify(notify_char, handler)
         _connected[name] = True
         print(f"{name} connected ✓")
         if all(_connected.values()):

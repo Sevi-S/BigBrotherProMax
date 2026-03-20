@@ -96,7 +96,7 @@ def acc_score(acc_data: pd.DataFrame):
 
 def BPM_score(HR_data: pd.DataFrame):
     HR_data = HR_data.replace(-1, pd.NA)
-    avg_bpm = float(HR_data.mean())
+    avg_bpm = float(HR_data["hr_bpm"].mean())
     hr_by_minute = average_by_minutes(HR_data)
     hr = hr_by_minute["hr_bpm"]*0.75
 
@@ -165,7 +165,7 @@ def SQL_upload(df: pd.DataFrame, stages_df: pd.Series, sleep_score: float, avg_B
     stages_df["start_ts"] = start_ts
     stages_df["end_ts"] = end_ts
     stages_df["session_id"] = session_id
-    stages_df.to_sql("stage_segments", con, if_exists="append", index=False)
+    stages_df[["session_id", "start_ts", "end_ts", "stage"]].to_sql("stage_segments", con, if_exists="append", index=False)
 
     con.commit()
     con.close()
