@@ -1,0 +1,622 @@
+#include "config.h"
+#include <stdint.h>
+#include <string.h>
+#include <NimBLEDevice.h>
+
+
+TTGOClass *ttgo;
+
+// SETTINGS
+static const uint32_t MOTION_INTERVAL_MS   = 50;
+static const uint32_t BATTERY_INTERVAL_MS  = 5000;
+static const uint32_t SEND_INTERVAL_MS     = 100;
+static const uint32_t UI_INTERVAL_MS       = 200;
+
+static const bool SERIAL_DEBUG = true;
+
+// BLE SETTINGS
+static const char *BLE_DEVICE_NAME       = "BigBrotherWatch";
+static const char *BLE_SERVICE_UUID      = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
+static const char *BLE_CHARACTERISTIC_RX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
+static const char *BLE_CHARACTERISTIC_TX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";
+
+// Chunking
+static const uint8_t BLE_CHUNK_MAGIC      = 0xBC;
+static const size_t  BLE_NOTIFY_MAX_BYTES = 20;
+static const size_t  BLE_CHUNK_HEADER_LEN = 4;
+static const size_t  BLE_CHUNK_DATA_LEN   = BLE_NOTIFY_MAX_BYTES - BLE_CHUNK_HEADER_LEN;
+
+// DISPLAY MODE
+enum DisplayMode : uint8_t {
+  DISPLAY_ON = 0,
+  DISPLAY_DIM_TRACK = 1,
+  DISPLAY_OFF = 2
+};
+
+static DisplayMode displayMode = DISPLAY_ON;
+
+// TRACKING STATE
+enum TrackingState : uint8_t {
+  TRACK_OFF    = 0,
+  TRACK_ACTIVE = 1
+};
+
+static TrackingState trackingState = TRACK_OFF;
+
+// PACKET FORMAT
+static const uint16_t PACKET_SYNC     = 0xA55A;
+static const uint8_t  PACKET_VERSION  = 1;
+static const uint8_t  SOURCE_ID_WATCH = 1;
+
+#pragma pack(push, 1)
+struct PacketPayload {
+  uint8_t  version;
+  uint8_t  source_id;
+  uint8_t  packet_type;
+  uint8_t  event_code;
+
+  uint32_t send_ms;
+  uint32_t motion_ms;
+  uint32_t battery_ms;
+
+  int16_t  ax_mg;
+  int16_t  ay_mg;
+  int16_t  az_mg;
+
+  uint32_t steps;
+  uint16_t batt_mv;
+  uint8_t  batt_pct;
+
+  uint8_t  flags;
+};
+
+struct PacketFrame {
+  uint16_t sync;
+  uint16_t payload_len;
+  PacketPayload payload;
+  uint16_t checksum;
+};
+#pragma pack(pop)
+
+// STATE / DATA
+static bool bmaOk = false;
+static bool charging = false;
+
+static int16_t   ax_mg = 0;
+static int16_t   ay_mg = 0;
+static int16_t   az_mg = 0;
+static uint32_t  stepsCount = 0;
+static uint16_t  batt_mv = 0;
+static uint8_t   batt_pct = 0;
+
+static uint32_t  motionMs = 0;
+static uint32_t  batteryMs = 0;
+
+// UI OBJECTS
+static lv_obj_t *root       = nullptr;
+static lv_obj_t *lblBattery = nullptr;
+static lv_obj_t *barBattery = nullptr;
+static lv_obj_t *btnTrack   = nullptr;
+static lv_obj_t *lblTrack   = nullptr;
+static lv_obj_t *ledTrack   = nullptr;
+static lv_obj_t *lblStatus  = nullptr;
+
+// TIMERS
+static uint32_t lastMotionSample = 0;
+static uint32_t lastBatteryRead  = 0;
+static uint32_t lastSend         = 0;
+static uint32_t lastUI           = 0;
+
+// BLE OBJECTS
+static NimBLEServer         *pServer = nullptr;
+static NimBLECharacteristic *pTxCharacteristic = nullptr;
+static NimBLECharacteristic *pRxCharacteristic = nullptr;
+static bool bleClientConnected = false;
+static bool bleAdvertisingActive = false;
+static bool bleInitialized = false;
+static uint8_t bleMessageId = 0;
+static uint16_t bleConnHandle = 0xFFFF; // invalid handle
+
+// HELPERS
+static inline void dbg_println(const char *s) {
+  if (SERIAL_DEBUG) Serial.println(s);
+}
+
+static inline bool tracking_enabled() {
+  return trackingState == TRACK_ACTIVE;
+}
+
+static inline uint8_t clamp_batt_pct(int pct) {
+  if (pct < 0) return 0;
+  if (pct > 100) return 100;
+  return (uint8_t)pct;
+}
+
+static inline uint8_t build_flags() {
+  uint8_t f = 0;
+
+  if (tracking_enabled())            f |= (1 << 0);
+  if (trackingState == TRACK_ACTIVE) f |= (1 << 1);
+  if (displayMode == DISPLAY_ON)     f |= (1 << 2);
+  if (charging)                      f |= (1 << 3);
+  if (bmaOk)                         f |= (1 << 4);
+
+  return f;
+}
+
+static uint16_t checksum16(const uint8_t *data, size_t len) {
+  uint32_t sum = 0;
+  for (size_t i = 0; i < len; ++i) {
+    sum += data[i];
+  }
+  return (uint16_t)(sum & 0xFFFF);
+}
+
+// DISPLAY CONTROL
+static void display_full_on() {
+  displayMode = DISPLAY_ON;
+  ttgo->openBL();
+}
+
+static void display_dim_tracking() {
+  displayMode = DISPLAY_DIM_TRACK;
+  ttgo->openBL();
+}
+
+static void display_full_off() {
+  displayMode = DISPLAY_OFF;
+  ttgo->closeBL();
+}
+
+// MOTION
+static void motion_init() {
+  bmaOk = ttgo->bma->begin();
+  if (bmaOk) {
+    ttgo->bma->enableAccel();
+  }
+}
+
+static void read_motion_raw() {
+  if (!bmaOk) {
+    ax_mg = 0;
+    ay_mg = 0;
+    az_mg = 0;
+    motionMs = millis();
+    return;
+  }
+
+  Accel acc;
+  bool ok = ttgo->bma->getAccel(acc);
+
+  if (ok) {
+    ax_mg = (int16_t)acc.x;
+    ay_mg = (int16_t)acc.y;
+    az_mg = (int16_t)acc.z;
+    motionMs = millis();
+  }
+
+  stepsCount = ttgo->bma->getCounter();
+}
+
+// BATTERY
+static void read_battery_raw() {
+  int rawPct = ttgo->power->getBattPercentage();
+  uint16_t rawMv = (uint16_t)ttgo->power->getBattVoltage();
+  bool rawCharging = ttgo->power->isChargeing();
+
+  charging = rawCharging;
+  batt_mv = rawMv;
+
+  if (rawPct < 0 || rawPct > 100) {
+    if (batt_mv >= 4200) batt_pct = 100;
+    else if (batt_mv <= 3300) batt_pct = 0;
+    else batt_pct = (uint8_t)(((uint32_t)(batt_mv - 3300) * 100U) / 900U);
+  } else {
+    batt_pct = clamp_batt_pct(rawPct);
+  }
+
+  batteryMs = millis();
+}
+
+// BLE CALLBACKS
+class WatchServerCallbacks : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer *server, NimBLEConnInfo &connInfo) override {
+    (void)server;
+    bleClientConnected = true;
+    bleAdvertisingActive = false;
+    bleConnHandle = connInfo.getConnHandle();
+    dbg_println("BLE client connected");
+  }
+
+  void onDisconnect(NimBLEServer *server, NimBLEConnInfo &connInfo, int reason) override {
+    (void)connInfo;
+    (void)reason;
+    bleClientConnected = false;
+    bleConnHandle = 0xFFFF;
+    dbg_println("BLE client disconnected");
+
+    if (tracking_enabled()) {
+      server->startAdvertising();
+      bleAdvertisingActive = true;
+      dbg_println("BLE advertising restarted after disconnect");
+    } else {
+      bleAdvertisingActive = false;
+      dbg_println("BLE remains off because tracking is off");
+    }
+  }
+};
+
+class WatchRxCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &connInfo) override {
+    (void)connInfo;
+
+    std::string rx = characteristic->getValue();
+    if (!rx.empty() && SERIAL_DEBUG) {
+      Serial.print("BLE RX: ");
+      for (size_t i = 0; i < rx.size(); ++i) {
+        Serial.print((char)rx[i]);
+      }
+      Serial.println();
+    }
+  }
+};
+
+// BLE INIT / SEND
+static void ble_init() {
+  if (bleInitialized) return;
+
+  NimBLEDevice::init(BLE_DEVICE_NAME);
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+
+  pServer = NimBLEDevice::createServer();
+  pServer->setCallbacks(new WatchServerCallbacks());
+
+  NimBLEService *service = pServer->createService(BLE_SERVICE_UUID);
+
+  pTxCharacteristic = service->createCharacteristic(
+    BLE_CHARACTERISTIC_TX,
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+  );
+  pTxCharacteristic->createDescriptor("2902");
+  pTxCharacteristic->setValue("ready");
+
+  pRxCharacteristic = service->createCharacteristic(
+    BLE_CHARACTERISTIC_RX,
+    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
+  );
+  pRxCharacteristic->setCallbacks(new WatchRxCallbacks());
+
+  service->start();
+
+  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+  advertising->addServiceUUID(BLE_SERVICE_UUID);
+
+  bleInitialized = true;
+  dbg_println("BLE initialized");
+}
+
+static void ble_start_advertising() {
+  if (!bleInitialized) {
+    ble_init();
+  }
+
+  if (bleClientConnected) {
+    dbg_println("BLE advertising not started because client already connected");
+    bleAdvertisingActive = false;
+    return;
+  }
+
+  if (bleAdvertisingActive) {
+    dbg_println("BLE advertising already active");
+    return;
+  }
+
+  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+  advertising->start();
+  bleAdvertisingActive = true;
+  dbg_println("BLE advertising started");
+}
+
+static void ble_stop_advertising() {
+  if (!bleInitialized) return;
+
+  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+  advertising->stop();
+  bleAdvertisingActive = false;
+
+  if (bleClientConnected && pServer != nullptr && bleConnHandle != 0xFFFF) {
+    dbg_println("Disconnecting BLE client because tracking stopped");
+    pServer->disconnect(bleConnHandle);
+  }
+
+  dbg_println("BLE advertising stopped");
+}
+
+static void ble_send_chunked(const uint8_t *data, size_t len) {
+  if (!bleClientConnected || pTxCharacteristic == nullptr) return;
+
+  uint8_t msgId = ++bleMessageId;
+  if (msgId == 0) {
+    msgId = ++bleMessageId;
+  }
+
+  const uint8_t totalChunks = (uint8_t)((len + BLE_CHUNK_DATA_LEN - 1) / BLE_CHUNK_DATA_LEN);
+  size_t offset = 0;
+
+  for (uint8_t chunkIdx = 0; chunkIdx < totalChunks; ++chunkIdx) {
+    uint8_t packet[BLE_NOTIFY_MAX_BYTES];
+    const size_t remaining = len - offset;
+    const size_t chunkDataLen = (remaining > BLE_CHUNK_DATA_LEN) ? BLE_CHUNK_DATA_LEN : remaining;
+
+    packet[0] = BLE_CHUNK_MAGIC;
+    packet[1] = msgId;
+    packet[2] = chunkIdx;
+    packet[3] = totalChunks;
+
+    memset(packet + BLE_CHUNK_HEADER_LEN, 0, BLE_CHUNK_DATA_LEN);
+    memcpy(packet + BLE_CHUNK_HEADER_LEN, data + offset, chunkDataLen);
+
+    pTxCharacteristic->setValue(packet, BLE_CHUNK_HEADER_LEN + chunkDataLen);
+    pTxCharacteristic->notify();
+
+    offset += chunkDataLen;
+    delay(6);
+  }
+}
+
+// PACKET SEND
+static void send_packet(uint8_t packet_type, uint8_t event_code) {
+  PacketFrame frame;
+  memset(&frame, 0, sizeof(frame));
+
+  frame.sync = PACKET_SYNC;
+  frame.payload_len = sizeof(PacketPayload);
+
+  frame.payload.version     = PACKET_VERSION;
+  frame.payload.source_id   = SOURCE_ID_WATCH;
+  frame.payload.packet_type = packet_type;
+  frame.payload.event_code  = event_code;
+
+  frame.payload.send_ms     = millis();
+  frame.payload.motion_ms   = motionMs;
+  frame.payload.battery_ms  = batteryMs;
+
+  frame.payload.ax_mg       = ax_mg;
+  frame.payload.ay_mg       = ay_mg;
+  frame.payload.az_mg       = az_mg;
+
+  frame.payload.steps       = stepsCount;
+  frame.payload.batt_mv     = batt_mv;
+  frame.payload.batt_pct    = batt_pct;
+
+  frame.payload.flags       = build_flags();
+
+  frame.checksum = checksum16((const uint8_t *)&frame.payload, sizeof(frame.payload));
+
+  if (!SERIAL_DEBUG) {
+    Serial.write((const uint8_t *)&frame, sizeof(frame));
+  } else {
+    Serial.printf("PKT type=%u event=%u tracking=%u adv=%u conn=%u batt=%u%%\n",
+                  packet_type,
+                  event_code,
+                  trackingState == TRACK_ACTIVE,
+                  bleAdvertisingActive,
+                  bleClientConnected,
+                  batt_pct);
+  }
+
+  ble_send_chunked((const uint8_t *)&frame, sizeof(frame));
+}
+
+static void send_status_packet() {
+  send_packet(0, 0);
+}
+
+static void send_event_packet(uint8_t event_code) {
+  send_packet(1, event_code);
+}
+
+// TRACKING CONTROL
+static void tracking_start() {
+  trackingState = TRACK_ACTIVE;
+  dbg_println("TRACKING START pressed");
+  ble_start_advertising();
+  send_event_packet(1);
+}
+
+static void tracking_stop() {
+  dbg_println("TRACKING STOP pressed");
+  send_event_packet(2);
+  trackingState = TRACK_OFF;
+  ble_stop_advertising();
+}
+
+// LVGL CALLBACKS
+static void touch_anywhere_cb(lv_obj_t *obj, lv_event_t e) {
+  (void)obj;
+  if (e != LV_EVENT_CLICKED) return;
+  if (displayMode != DISPLAY_ON) return;
+}
+
+static void ui_update();
+
+static void tracking_btn_cb(lv_obj_t *obj, lv_event_t e) {
+  (void)obj;
+  if (e != LV_EVENT_CLICKED) return;
+  if (displayMode != DISPLAY_ON) return;
+
+  dbg_println("Track button clicked");
+
+  if (trackingState == TRACK_OFF) {
+    tracking_start();
+  } else {
+    tracking_stop();
+  }
+
+  ui_update();
+}
+
+// UI
+static void build_ui() {
+  root = lv_obj_create(lv_scr_act(), nullptr);
+  lv_obj_set_size(root, LV_HOR_RES, LV_VER_RES);
+  lv_obj_set_pos(root, 0, 0);
+  lv_obj_set_click(root, true);
+  lv_obj_set_event_cb(root, touch_anywhere_cb);
+  lv_obj_set_style_local_bg_color(root, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_BLACK);
+  lv_obj_set_style_local_bg_opa(root, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_COVER);
+
+  lblBattery = lv_label_create(root, nullptr);
+  lv_obj_align(lblBattery, nullptr, LV_ALIGN_IN_TOP_MID, 0, 20);
+
+  barBattery = lv_bar_create(root, nullptr);
+  lv_obj_set_size(barBattery, LV_HOR_RES - 40, 18);
+  lv_obj_align(barBattery, nullptr, LV_ALIGN_IN_TOP_MID, 0, 48);
+  lv_bar_set_range(barBattery, 0, 100);
+
+  ledTrack = lv_led_create(root, nullptr);
+  lv_obj_align(ledTrack, nullptr, LV_ALIGN_CENTER, 0, -12);
+
+  lblStatus = lv_label_create(root, nullptr);
+  lv_obj_align(lblStatus, nullptr, LV_ALIGN_CENTER, 0, 20);
+
+  btnTrack = lv_btn_create(root, nullptr);
+  lv_obj_set_size(btnTrack, 170, 50);
+  lv_obj_align(btnTrack, nullptr, LV_ALIGN_IN_BOTTOM_MID, 0, -24);
+  lv_obj_set_event_cb(btnTrack, tracking_btn_cb);
+
+  lblTrack = lv_label_create(btnTrack, nullptr);
+  lv_label_set_text(lblTrack, "START TRACKING");
+}
+
+static void ui_set_tracking_led() {
+  if (trackingState == TRACK_OFF) {
+    lv_led_off(ledTrack);
+  } else {
+    lv_led_on(ledTrack);
+    lv_obj_set_style_local_bg_color(ledTrack, LV_LED_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_GREEN);
+  }
+}
+
+static void ui_update_full() {
+  lv_obj_set_hidden(lblBattery, false);
+  lv_obj_set_hidden(barBattery, false);
+  lv_obj_set_hidden(btnTrack, false);
+  lv_obj_set_hidden(lblStatus, false);
+  lv_obj_set_hidden(ledTrack, false);
+
+  char buf[48];
+  snprintf(buf, sizeof(buf), "Battery %u%%", batt_pct);
+  lv_label_set_text(lblBattery, buf);
+  lv_bar_set_value(barBattery, batt_pct, LV_ANIM_OFF);
+
+  if (batt_pct < 20) {
+    lv_obj_set_style_local_bg_color(barBattery, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, LV_COLOR_RED);
+  } else if (batt_pct < 50) {
+    lv_obj_set_style_local_bg_color(barBattery, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, LV_COLOR_YELLOW);
+  } else {
+    lv_obj_set_style_local_bg_color(barBattery, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, LV_COLOR_GREEN);
+  }
+
+  ui_set_tracking_led();
+
+  if (trackingState == TRACK_OFF) {
+    lv_label_set_text(lblStatus, "TRACKING OFF");
+    lv_label_set_text(lblTrack, "START TRACKING");
+  } else {
+    lv_label_set_text(lblStatus, "TRACKING ON");
+    lv_label_set_text(lblTrack, "STOP TRACKING");
+  }
+}
+
+static void ui_update_dim_tracking() {
+  lv_obj_set_hidden(lblBattery, true);
+  lv_obj_set_hidden(barBattery, true);
+  lv_obj_set_hidden(btnTrack, true);
+  lv_obj_set_hidden(lblStatus, true);
+  lv_obj_set_hidden(ledTrack, false);
+
+  lv_obj_align(ledTrack, nullptr, LV_ALIGN_CENTER, 0, 0);
+  ui_set_tracking_led();
+}
+
+static void ui_update() {
+  if (displayMode == DISPLAY_OFF) return;
+
+  if (displayMode == DISPLAY_ON) {
+    lv_obj_align(ledTrack, nullptr, LV_ALIGN_CENTER, 0, -12);
+    ui_update_full();
+  } else {
+    ui_update_dim_tracking();
+  }
+}
+
+// SETUP
+void setup() {
+  Serial.begin(115200);
+  delay(50);
+
+  ttgo = TTGOClass::getWatch();
+  ttgo->begin();
+  ttgo->openBL();
+  ttgo->lvgl_begin();
+
+  ttgo->power->enableIRQ(AXP202_PEK_SHORTPRESS_IRQ, true);
+  ttgo->power->clearIRQ();
+
+  motion_init();
+  read_battery_raw();
+  read_motion_raw();
+
+  build_ui();
+  display_full_on();
+  ui_update();
+
+  ble_init();
+
+  dbg_println("Watch ready");
+  dbg_println("BLE name: BigBrotherWatch");
+}
+
+// LOOP
+void loop() {
+  lv_task_handler();
+  delay(2);
+
+  ttgo->power->readIRQ();
+  if (ttgo->power->isPEKShortPressIRQ()) {
+    ttgo->power->clearIRQ();
+
+    if (displayMode == DISPLAY_ON) {
+      if (tracking_enabled()) {
+        display_dim_tracking();
+      } else {
+        display_full_off();
+      }
+    } else {
+      display_full_on();
+    }
+  }
+
+  uint32_t now = millis();
+
+  if ((uint32_t)(now - lastMotionSample) >= MOTION_INTERVAL_MS) {
+    lastMotionSample = now;
+    read_motion_raw();
+  }
+
+  if ((uint32_t)(now - lastBatteryRead) >= BATTERY_INTERVAL_MS) {
+    lastBatteryRead = now;
+    read_battery_raw();
+  }
+
+  if ((uint32_t)(now - lastSend) >= SEND_INTERVAL_MS) {
+    lastSend = now;
+    send_status_packet();
+  }
+
+  if (displayMode != DISPLAY_OFF && (uint32_t)(now - lastUI) >= UI_INTERVAL_MS) {
+    lastUI = now;
+    ui_update();
+  }
+}
