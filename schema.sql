@@ -8,10 +8,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 
   sleep_score INTEGER,
   total_sleep_min INTEGER,
-  sleep_efficiency INTEGER,                 -- 0..100
-  awakenings INTEGER,
-  resting_hr_bpm INTEGER,
-  hrv_rmssd_ms INTEGER,
+  avg_hr_bpm INTEGER,
   avg_spo2 INTEGER,
   min_spo2 INTEGER
 );

@@ -82,12 +82,9 @@ function renderKpis(n){
   const items = [
     ["Sleep score", n.sleep_score],
     ["Total sleep", fmtMinutes(n.total_sleep_min)],
-    ["Efficiency", `${n.sleep_efficiency}%`],
-    ["Awakenings", n.awakenings],
-    ["Resting HR", `${n.resting_hr_bpm} bpm`],
+    ["Avg HR", `${n.avg_hr_bpm} bpm`],
     ["Avg SpO₂", `${n.avg_spo2}%`],
     ["Min SpO₂", `${n.min_spo2}%`],
-    ["HRV (RMSSD)", `${n.hrv_rmssd_ms} ms`],
   ];
   k.innerHTML = items.map(([label,val]) => `
     <div class="kpi"><div class="muted">${label}</div><div class="v">${val}</div></div>

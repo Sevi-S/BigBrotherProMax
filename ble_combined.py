@@ -84,7 +84,7 @@ def oximeter_handler(sender, data: bytearray):
     hr, spo2 = None, None
     try:
         parts = text.split(",")
-        h, s = int(parts[1]), int(parts[2])
+        h, s = int(parts[2]), int(parts[1])
         if h != -1: hr = h
         if s != -1: spo2 = s
     except (IndexError, ValueError):

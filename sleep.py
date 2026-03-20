@@ -149,7 +149,7 @@ def SQL_upload(df: pd.DataFrame, stages_df: pd.Series, sleep_score: float, avg_B
     # cur.execute(allat)
     cur = con.execute(
         "INSERT INTO sessions (night_date, start_ts, end_ts, sleep_score, total_sleep_min, "
-        "resting_hr_bpm, avg_spo2, min_spo2) "
+        "avg_hr_bpm, avg_spo2, min_spo2) "
         "VALUES (?,?,?,?,?,?,?,?)", 
         (date, start_ts, end_ts, sleep_score, total_sleep_min, avg_BPM, avg_spo2, min_spo2)
     )
