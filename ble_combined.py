@@ -1,14 +1,10 @@
 import asyncio
 import struct
 import time
-import sqlite3
-from datetime import date
 from bleak import BleakScanner, BleakClient
 import pandas as pd
 
-from analysis import analyse
-
-DB = "sleep.db"
+from sleep import process
 
 #Device names
 OXIMETER_NAME = "ESP32_Oximeter"
@@ -72,47 +68,10 @@ def session_end():
     print("[SESSION END] Running analysis...")
 
     df = pd.DataFrame(_rows, columns=["ts", "source", "hr_bpm", "spo2_pct", "ax_mg", "ay_mg", "az_mg", "steps"])
-    result = analyse(df)
-    upload(df, result["kpis"], result["stages"])
+    process(df)
 
-    # Reset for next session
     _rows.clear()
     print("[READY] Waiting for next session...")
-
-
-def upload(df: pd.DataFrame, kpis: dict, stages_df: pd.DataFrame):
-    night_date = date.fromtimestamp(df["ts"].min()).isoformat()
-    start_ts   = int(df["ts"].min())
-    end_ts     = int(df["ts"].max())
-
-    con = sqlite3.connect(DB)
-    con.execute("PRAGMA foreign_keys = ON;")
-    with open("schema.sql") as f:
-        con.executescript(f.read())
-
-    cur = con.execute(
-        "INSERT OR IGNORE INTO sessions "
-        "(night_date, start_ts, end_ts, sleep_score, total_sleep_min, sleep_efficiency, "
-        "awakenings, resting_hr_bpm, hrv_rmssd_ms, avg_spo2, min_spo2) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (night_date, start_ts, end_ts,
-         kpis.get("sleep_score"), kpis.get("total_sleep_min"), kpis.get("sleep_efficiency"),
-         kpis.get("awakenings"), kpis.get("resting_hr_bpm"), kpis.get("hrv_rmssd_ms"),
-         kpis.get("avg_spo2"), kpis.get("min_spo2"))
-    )
-    session_id = cur.lastrowid or con.execute(
-        "SELECT id FROM sessions WHERE night_date=?", (night_date,)
-    ).fetchone()[0]
-
-    df["session_id"] = session_id
-    df.to_sql("samples", con, if_exists="append", index=False)
-
-    stages_df["session_id"] = session_id
-    stages_df.to_sql("stage_segments", con, if_exists="append", index=False)
-
-    con.commit()
-    con.close()
-    print(f"[DB] Session {night_date} uploaded.")
 
 
 #Handlers

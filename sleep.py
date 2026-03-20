@@ -11,7 +11,7 @@ import pandas as pd
 
 def process(df: pd.DataFrame):
     original = df.copy()
-    df["datetime"] = pd.to_datetime(df["ts"], unit="ms")
+    df["datetime"] = pd.to_datetime(df["ts"], unit="s")
     df = df.sort_values("datetime").set_index("datetime")
     spo2 = df[["spo2_pct"]]
     acc = df[["ts", "ax_mg", "ay_mg", "az_mg"]]
@@ -137,7 +137,7 @@ def SQL_upload(df: pd.DataFrame, stages_df: pd.Series, sleep_score: float, avg_B
     DB = "sleep.db"
     con = sqlite3.connect(DB)
 
-    time = pd.to_datetime(df["ts"], unit="ms")
+    time = pd.to_datetime(df["ts"], unit="s")
 
     date = time.max().date()  # or time.min().date()
     start_ts = df["ts"].min()
