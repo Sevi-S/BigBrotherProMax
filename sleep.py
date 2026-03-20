@@ -165,6 +165,7 @@ def SQL_upload(df: pd.DataFrame, stages_df: pd.Series, sleep_score: float, avg_B
     stages_df["start_ts"] = start_ts
     stages_df["end_ts"] = end_ts
     stages_df["session_id"] = session_id
+    stages_df = stages_df.dropna(subset=["stage"])
     stages_df[["session_id", "start_ts", "end_ts", "stage"]].to_sql("stage_segments", con, if_exists="append", index=False)
 
     con.commit()
