@@ -1,0 +1,99 @@
+#include <Wire.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+#include "DFRobot_BloodOxygen_S.h"
+
+#define I2C_ADDRESS 0x57
+DFRobot_BloodOxygen_S_I2C MAX30102(&Wire, I2C_ADDRESS);
+
+// Nordic UART style UUIDs
+#define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+#define CHARACTERISTIC_RX_UUID "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+#define CHARACTERISTIC_TX_UUID "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+
+BLECharacteristic* pTxCharacteristic;
+bool deviceConnected = false;
+
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) override {
+    deviceConnected = true;
+  }
+
+  void onDisconnect(BLEServer* pServer) override {
+    deviceConnected = false;
+    BLEDevice::startAdvertising();
+  }
+};
+
+class MyRxCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) override {
+    std::string rxValue = pCharacteristic->getValue();
+    if (!rxValue.empty()) {
+      Serial.print("RX: ");
+      Serial.println(rxValue.c_str());
+    }
+  }
+};
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Wire.begin(21, 22);
+  Wire.setClock(100000);
+
+  while (!MAX30102.begin()) {
+    Serial.println("init_fail");
+    delay(1000);
+  }
+  MAX30102.sensorStartCollect();
+
+  BLEDevice::init("ESP32_Oximeter");
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+
+  pTxCharacteristic = pService->createCharacteristic(
+    CHARACTERISTIC_TX_UUID,
+    BLECharacteristic::PROPERTY_NOTIFY
+  );
+  pTxCharacteristic->addDescriptor(new BLE2902());
+
+  BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(
+    CHARACTERISTIC_RX_UUID,
+    BLECharacteristic::PROPERTY_WRITE
+  );
+  pRxCharacteristic->setCallbacks(new MyRxCallbacks());
+
+  pService->start();
+
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->start();
+
+  Serial.println("BLE ready");
+}
+
+void loop() {
+  MAX30102.getHeartbeatSPO2();
+
+  int spo2 = MAX30102._sHeartbeatSPO2.SPO2;
+  int bpm  = MAX30102._sHeartbeatSPO2.Heartbeat;
+  float t  = MAX30102.getTemperature_C();
+
+  char payload[64];
+  snprintf(payload, sizeof(payload), "%lu,%d,%d,%.2f",
+           millis(), spo2, bpm, t);
+
+
+  if (deviceConnected) {
+    pTxCharacteristic->setValue((uint8_t*)payload, strlen(payload));
+    pTxCharacteristic->notify();
+    Serial.println(payload);
+  }
+
+  delay(1000);
+}
