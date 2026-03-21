@@ -1,5 +1,9 @@
 # BigBrotherProMax — Sleep Tracker
 
+BLE-based sleep monitoring system. An ESP32 pulse oximeter and a LilyGo T-Wrist watch stream heart rate, SpO2, and accelerometer data over Bluetooth to a Raspberry Pi. A Python script captures and merges both streams, runs sleep stage classification, and stores results in a local SQLite database. A Flask web UI serves a dashboard with sleep scores, HR/SpO2 charts, and sleep stage breakdowns.
+
+**Stack:** Python · BLE (Bleak) · SQLite · Flask · Chart.js
+
 ## First time setup
 
 ```bash
