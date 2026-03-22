@@ -96,7 +96,7 @@ def acc_score(acc_data: pd.DataFrame):
 
 def BPM_score(HR_data: pd.DataFrame):
     HR_data = HR_data.replace(-1, pd.NA)
-    avg_bpm = float(HR_data["hr_bpm"].mean())
+    avg_bpm = int(HR_data["hr_bpm"].mean()*0.75)
     hr_by_minute = average_by_minutes(HR_data)
     hr = hr_by_minute["hr_bpm"]*0.75
 
