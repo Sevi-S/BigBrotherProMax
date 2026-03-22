@@ -1,15 +1,8 @@
-ESP32 (Oximeter/SpO2)
+ESP32 
 ----------------
 - DFRobot_BloodOxygen_S by DFRobot V1.0.0
-
 - NimBLE-Arduino by h2zero V2.4.0
-
-
-Watch (LilyGo T-Watch)
-----------------------
-- NimBLE-Arduino
-- TFT_eSPI
-
+- TFT_eSPI by bodmer V2.5.43
 - TTGO_TWatch_Library by Xinyuan-LilyGO
 
 Boards
