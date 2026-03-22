@@ -28,7 +28,7 @@ def process(df: pd.DataFrame):
         BPM_scores * HR_WEIGHT
     )
 
-    bins = [0, 25, 50, 75, 100]
+    bins = [0, 20, 40, 60, 80]
     labels = ["Awake", "Light", "Deep", "REM"]
     stages = total_by_minutes.to_frame(name="score")
 
@@ -49,7 +49,7 @@ def process(df: pd.DataFrame):
 def spo2_score(spo2_data: pd.DataFrame):
     spo2_data = spo2_data.replace(-1, pd.NA)
     avg_spo2 = spo2_data["spo2_pct"].mean()
-    min_spo2 = float(spo2_data["spo2_pct"].min())
+    min_spo2 = int(spo2_data["spo2_pct"].min())
     
     spo2_by_minute = average_by_minutes(spo2_data)
     ox = spo2_by_minute["spo2_pct"]
