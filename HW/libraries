@@ -1,0 +1,22 @@
+ESP32 (Oximeter/SpO2)
+----------------
+- DFRobot_BloodOxygen_S by DFRobot V1.0.0
+
+- NimBLE-Arduino by h2zero V2.4.0
+
+
+Watch (LilyGo T-Watch)
+----------------------
+- NimBLE-Arduino
+- TFT_eSPI
+
+- TTGO_TWatch_Library by Xinyuan-LilyGO
+
+Boards
+----------------------
+- esp32 by Espressif Systems V3.3.7
+
+Notes
+-----
+- Sensor library: MAX30102 (DFRobot)
+- Display library may vary depending on LilyGo model
