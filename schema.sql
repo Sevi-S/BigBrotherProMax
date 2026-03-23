@@ -13,6 +13,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   min_spo2 INTEGER
 );
 
+-- NOTE: if extra columns are needed later, add them here:
+-- sleep_efficiency INTEGER,
+-- awakenings INTEGER,
+-- hrv_rmssd_ms INTEGER,
+
 CREATE TABLE IF NOT EXISTS samples (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id INTEGER NOT NULL,
