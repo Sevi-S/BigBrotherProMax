@@ -12,7 +12,7 @@ An ESP32-WROOM-32 board connected to a pulse oximeter sensor. Streams heart rate
 
 ![ESP32 pinout](images/esp2_oxi.png)
 
-![ESP32 pinout](images/oxi/spo2.png.png)
+![ESP32 pinout](images/oxi_spo2.png.png)
 
 ### LilyGo T-Wrist Watch
 
