@@ -12,6 +12,8 @@ An ESP32-WROOM-32 board connected to a pulse oximeter sensor. Streams heart rate
 
 ![ESP32 pinout](images/esp2_oxi.png)
 
+![ESP32 pinout](images/oxi/spo2.png.png)
+
 ### LilyGo T-Wrist Watch
 
 A LilyGo T-Watch 2020 V3 with a BMA423 accelerometer, touch screen, and BLE. Custom firmware streams accelerometer data and step count to the Pi. A button press on the watch starts and stops tracking. The screen dims automatically during a session to save battery.
@@ -67,7 +69,3 @@ Press **Ctrl+C** to stop.
 6. Results are stored in the local SQLite database
 7. View sleep data at http://127.0.0.1:8000
 
-
-## User Manual
-
-![User Manual](images/User Manual.pdf)
