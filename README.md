@@ -70,4 +70,4 @@ Press **Ctrl+C** to stop.
 
 ## User Manual
 
-![User Manual](images/User Manual)
+![User Manual](images/User Manual.pdf)
