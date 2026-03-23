@@ -66,3 +66,8 @@ Press **Ctrl+C** to stop.
 5. Sleep stages are classified and a sleep score is computed
 6. Results are stored in the local SQLite database
 7. View sleep data at http://127.0.0.1:8000
+
+
+## User Manual
+
+![User Manual](images/User Manual)
